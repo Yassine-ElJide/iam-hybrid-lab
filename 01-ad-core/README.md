@@ -5,7 +5,7 @@ Statut : en cours (phase 1 du calendrier)
 ## VM concernees
 
 - **DC-01** (ex WIN-DA7VN0OLOAL, renomme) : Windows Server 2022, controleur de domaine
-- **WST-01** : Windows 11 Pro, poste client de test
+- **WST-01** : Windows 11 Pro, poste client de test, joint au domaine
 
 ## Etapes realisees
 
@@ -82,6 +82,26 @@ netdom computername DC-01.lab.local /enumerate
 netdom computername DC-01.lab.local /remove:WIN-DA7VN0OLOAL.lab.local
 Restart-Computer
 ```
+
+### Jonction de WST-01 au domaine
+
+WST-01 n'heberge aucune zone DNS, contrairement a DC-01. Pour resoudre les enregistrements SRV de `lab.local` et trouver un controleur de domaine, son client DNS doit pointer vers DC-01 (pas vers lui-meme, pas vers la passerelle NAT) :
+
+```powershell
+# Sur WST-01
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet1" -ServerAddresses 192.168.100.10
+
+# Verification avant de tenter le join
+Resolve-DnsName lab.local
+nslookup -type=srv _ldap._tcp.lab.local
+
+# Jonction au domaine
+Add-Computer -DomainName "lab.local" -Credential (Get-Credential) -Restart
+```
+
+Apres redemarrage, WST-01 apparait dans le conteneur `Computers` de `lab.local` via la console Utilisateurs et ordinateurs Active Directory sur DC-01.
+
+![WST-01 joint au domaine lab.local](captures/preuve-wst01-join-domaine-aduc.png)
 
 ## Etapes a venir
 
