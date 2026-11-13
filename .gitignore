@@ -1,0 +1,17 @@
+# Etat Terraform - jamais commite
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Images VM / exports
+*.ova
+*.vmdk
+*.vmx.lck
+
+# Secrets locaux
+*secrets*
+.env
+
+# OS / editeurs
+.DS_Store
+Thumbs.db
