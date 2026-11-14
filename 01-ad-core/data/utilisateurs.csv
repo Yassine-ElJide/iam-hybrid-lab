@@ -1,0 +1,28 @@
+Prenom,Nom,SamAccountName,UserPrincipalName,Departement,Poste,OU,Description
+Alice,Martin,amartin,amartin@lab.local,RH,Assistante RH,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Karim,Benali,kbenali,kbenali@lab.local,IT,Technicien Support,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Sophie,Lefevre,slefevre,slefevre@lab.local,Finance,Comptable,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Thomas,Girard,tgirard,tgirard@lab.local,Commercial,Charge d'affaires,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Emma,Rousseau,erousseau,erousseau@lab.local,Marketing,Chargee de communication,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Lucas,Fontaine,lfontaine,lfontaine@lab.local,Logistique,Magasinier,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Julie,Moreau,jmoreau,jmoreau@lab.local,RH,Responsable RH,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Nicolas,Petit,npetit,npetit@lab.local,IT,Developpeur,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Camille,Dubois,cdubois,cdubois@lab.local,Finance,Controleur de gestion,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Mathieu,Bernard,mbernard,mbernard@lab.local,Production,Technicien,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Laura,Simon,lsimon,lsimon@lab.local,Juridique,Juriste,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Antoine,Laurent,alaurent,alaurent@lab.local,Commercial,Responsable Commercial,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Chloe,Michel,cmichel,cmichel@lab.local,Marketing,Chef de projet,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Hugo,Garcia,hgarcia,hgarcia@lab.local,IT,Administrateur systeme,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Manon,Robert,mrobert,mrobert@lab.local,Qualite,Ingenieur Qualite,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Maxime,Richard,mrichard,mrichard@lab.local,Logistique,Responsable logistique,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Lea,Durand,ldurand,ldurand@lab.local,RH,Chargee de recrutement,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Romain,Leroy,rleroy,rleroy@lab.local,Finance,Analyste financier,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Sarah,Morel,smorel,smorel@lab.local,Commercial,Assistante commerciale,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Alexandre,Clement,aclement,aclement@lab.local,Production,Chef d'equipe,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Pauline,Andre,pandre,pandre@lab.local,Juridique,Assistante juridique,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Benjamin,Mercier,bmercier,bmercier@lab.local,IT,Technicien reseau,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Clara,Blanc,cblanc,cblanc@lab.local,Marketing,Community manager,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Julien,Guerin,jguerin,jguerin@lab.local,Qualite,Responsable qualite,"OU=Utilisateurs,OU=Tier2,DC=lab,DC=local",Utilisateur standard
+Yassine,El Jide,adm-yelj,adm-yelj@lab.local,IT,Administrateur IAM,"OU=Admins,OU=Tier0,DC=lab,DC=local",Compte d'administration nominatif - jamais utilise au quotidien
+Service,Sauvegarde,svc-backup,svc-backup@lab.local,IT,Compte de service,"OU=ComptesServices,OU=Tier1,DC=lab,DC=local",Compte de service dedie aux taches de sauvegarde planifiee
+Service,Supervision,svc-monitoring,svc-monitoring@lab.local,IT,Compte de service,"OU=ComptesServices,OU=Tier1,DC=lab,DC=local",Compte de service dedie a la supervision/monitoring
