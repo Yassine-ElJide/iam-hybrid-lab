@@ -2,10 +2,11 @@
 
 Statut : en cours (phase 1 du calendrier)
 
+Ce module couvre le coeur de l'annuaire : foret, controleur de domaine, arborescence d'OU/tiering, et cycle de vie des comptes (OU, groupes, utilisateurs). La gestion des postes clients (jonction au domaine, GPO postes) est documentee separement dans [02-postes](../02-postes/README.md).
+
 ## VM concernees
 
 - **DC-01** (ex WIN-DA7VN0OLOAL, renomme) : Windows Server 2022, controleur de domaine
-- **WST-01** : Windows 11 Pro, poste client de test, joint au domaine, range dans OU=Postes,OU=Tier2
 
 ## Etapes realisees
 
@@ -83,26 +84,6 @@ netdom computername DC-01.lab.local /remove:WIN-DA7VN0OLOAL.lab.local
 Restart-Computer
 ```
 
-### Jonction de WST-01 au domaine
-
-WST-01 n'heberge aucune zone DNS, contrairement a DC-01. Pour resoudre les enregistrements SRV de `lab.local` et trouver un controleur de domaine, son client DNS doit pointer vers DC-01 (pas vers lui-meme, pas vers la passerelle NAT) :
-
-```powershell
-# Sur WST-01
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet1" -ServerAddresses 192.168.100.10
-
-# Verification avant de tenter le join
-Resolve-DnsName lab.local
-nslookup -type=srv _ldap._tcp.lab.local
-
-# Jonction au domaine
-Add-Computer -DomainName "lab.local" -Credential (Get-Credential) -Restart
-```
-
-Apres redemarrage, WST-01 apparait dans le conteneur `Computers` de `lab.local` via la console Utilisateurs et ordinateurs Active Directory sur DC-01.
-
-![WST-01 joint au domaine lab.local](captures/preuve-wst01-join-domaine-aduc.png)
-
 ### Arborescence d'OU et modele de tiering (Tier 0/1/2)
 
 **Le probleme que ca resout.** Par defaut, AD range tout dans deux conteneurs plats (`Users`, `Computers`) qui ne distinguent rien par niveau de sensibilite. Un admin qui gere les DC et un utilisateur lambda se retrouvent dans la meme logique de rangement. Le **modele de tiering**, formalise par Microsoft, structure l'annuaire pour limiter le *blast radius* d'une compromission : si un poste utilisateur est infecte, l'attaquant ne doit pas pouvoir remonter jusqu'aux comptes qui administrent la foret.
@@ -124,7 +105,7 @@ Apres redemarrage, WST-01 apparait dans le conteneur `Computers` de `lab.local` 
 | `Tier1/ComptesServices` | Comptes utilises par les applications/services (pas des humains) | Les comptes de service ont des besoins differents (pas d'expiration de mot de passe interactive, droits limites a une tache) |
 | `Tier1/Groupes` | Groupes de securite Tier 1 | Meme logique que Tier0/Groupes, perimetre limite aux serveurs |
 | `Tier2/Postes` | Objets ordinateur des postes utilisateurs (WST-01 ici) | GPO de poste de travail standard (restrictions utilisateur, durcissement de base) |
-| `Tier2/Utilisateurs` | Comptes utilisateurs humains standards | Futurs utilisateurs crees en masse au Jour 9 du calendrier |
+| `Tier2/Utilisateurs` | Comptes utilisateurs humains standards | Comptes de test crees au Jour 9 (voir plus bas) |
 | `Tier2/Groupes` | Groupes de securite Tier 2 | Gestion des droits metier (acces fichiers, applications) sans toucher aux droits d'administration |
 
 Le flag `-ProtectedFromAccidentalDeletion $true` sur chaque OU pose une ACL deny-delete : pratique standard en production pour eviter qu'une suppression accidentelle d'OU n'emporte toutes les sous-OU et objets avec elle.
@@ -151,14 +132,7 @@ New-ADOrganizationalUnit -Name "Utilisateurs"  -Path "OU=Tier2,DC=lab,DC=local" 
 New-ADOrganizationalUnit -Name "Groupes"       -Path "OU=Tier2,DC=lab,DC=local" -ProtectedFromAccidentalDeletion $true
 ```
 
-WST-01 deplace ensuite de `Computers` vers sa place definitive :
-
-```powershell
-Get-ADComputer WST-01 | Move-ADObject -TargetPath "OU=Postes,OU=Tier2,DC=lab,DC=local"
-```
-
 ![Creation des OU Tier0/Tier1/Tier2](captures/preuve-creation-ou-tier-model.png)
-![WST-01 deplace dans OU=Postes,OU=Tier2](captures/preuve-wst01-deplace-tier2-postes.png)
 
 A noter : Microsoft a fait evoluer ce modele Tier 0/1/2 (2016) vers l'**Enterprise Access Model** (depuis ~2019), plus granulaire (Control Plane / Management Plane / Data Plane). Le tiering classique reste largement utilise et compris, donc choisi comme base pour ce lab.
 
@@ -172,9 +146,19 @@ Teste par une double execution : le premier run confirme que l'arborescence exis
 
 ![Relance idempotente du script de creation des OU](captures/preuve-script-idempotent-ou.png)
 
+### CSV et creation en masse des utilisateurs
+
+**Pourquoi un CSV plutot que des `New-ADUser` tapees a la main ?** Parce que c'est comme ca que ca se passe en entreprise : les RH exportent une liste d'arrivees depuis leur SIRH, et le provisioning IAM consomme ce fichier. Separer la donnee (qui sont ces gens) du script (comment on les cree) permet de rejouer la creation sur n'importe quel import sans retoucher le code.
+
+CSV disponible dans [`data/utilisateurs.csv`](data/utilisateurs.csv) : 27 comptes repartis volontairement sur les 3 tiers -- 24 utilisateurs standards (`Tier2/Utilisateurs`, departements varies : IT, Finance, RH, Commercial, Marketing, Production, Qualite, Logistique, Juridique), 1 compte admin nominatif (`adm-yelj`, dans `Tier0/Admins`, jamais confondu avec le compte `Administrateur` integre), et 2 comptes de service (`Tier1/ComptesServices`).
+
+Script de creation dans [`scripts/create-users-from-csv.ps1`](scripts/create-users-from-csv.ps1), idempotent lui aussi (`Get-ADUser -Filter` avant chaque creation). Chaque compte recoit un mot de passe initial avec `-ChangePasswordAtLogon $true` : le mot de passe de depart est volontairement faible mais personne ne peut l'utiliser au-dela de la premiere connexion.
+
+![Sortie du script de creation en masse (27 comptes)](captures/preuve-creation-masse-utilisateurs.png)
+![adm-yelj seul dans OU=Admins,OU=Tier0](captures/preuve-adm-yelj-tier0-admins.png)
+
 ## Etapes a venir
 
-- CSV de 20-30 utilisateurs realistes + script de creation en masse
 - Groupes de securite par tier et premieres delegations
 - Provisioning DC-02 et verification de la replication
 - GPO de durcissement (mot de passe, LAPS, Protected Users, restriction de login par tier)
@@ -187,3 +171,7 @@ Captures brutes et annotees des etapes ci-dessus.
 ## scripts/
 
 Scripts idempotents reutilisables pour reconstruire cette partie du lab.
+
+## data/
+
+Jeux de donnees (CSV) consommes par les scripts.
