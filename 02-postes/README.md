@@ -38,11 +38,25 @@ Un objet ordinateur fraichement joint atterrit par defaut dans le conteneur plat
 Get-ADComputer WST-01 | Move-ADObject -TargetPath "OU=Postes,OU=Tier2,DC=lab,DC=local"
 ```
 
+### Test de connexion utilisateur de bout en bout
+
+Une fois un poste joint au domaine, **par defaut Windows autorise n'importe quel utilisateur authentifie du domaine a ouvrir une session locale** sur une machine membre (pas un DC) -- ce droit vient du parametre `Allow log on locally`, qui inclut implicitement le groupe `Authenticated Users` tant qu'aucune GPO ne vient le restreindre. C'est volontairement ouvert a ce stade : la restriction par tier viendra avec les GPO de durcissement (Jour 11-12).
+
+Connexion testee avec le compte `amartin` (Alice Martin, `Tier2/Utilisateurs`, cree au Jour 9), au format `LAB\amartin` :
+
+1. Windows force le changement du mot de passe initial a la premiere connexion, comme attendu (`-ChangePasswordAtLogon $true` pose au moment de la creation du compte)
+2. La session s'ouvre normalement ensuite, confirmant la chaine complete : CSV -> compte AD cree dans la bonne OU -> authentification Kerberos -> session locale sur un poste membre du domaine
+
+**Point de vigilance tiering, volontairement teste** : seuls des comptes `Tier2` doivent servir a se connecter a WST-01. Le compte `adm-yelj` (`Tier0/Admins`) ne doit jamais etre utilise ici, meme si rien ne l'empeche techniquement pour l'instant -- exactement le risque de mouvement lateral explique en [01-ad-core](../01-ad-core/README.md#arborescence-dou-et-modele-de-tiering-tier-012).
+
+![Changement de mot de passe force a la premiere connexion](captures/preuve-changement-mdp-premiere-connexion.png)
+![Session ouverte avec succes sous LAB\amartin sur WST-01](captures/preuve-connexion-amartin-wst01.png)
+
 ## Etapes a venir
 
 - GPO de poste standard appliquees sur `Tier2/Postes` (restrictions utilisateur, durcissement de base)
+- GPO `Deny log on locally` pour restreindre formellement l'acces par tier
 - Provisioning d'un deuxieme poste pour tester la coherence des GPO
-- Tests de connexion avec les comptes utilisateurs crees en [01-ad-core](../01-ad-core/README.md#csv-et-creation-en-masse-des-utilisateurs)
 
 ## captures/
 
