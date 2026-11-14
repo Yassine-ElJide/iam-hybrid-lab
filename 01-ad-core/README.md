@@ -162,9 +162,18 @@ Get-ADComputer WST-01 | Move-ADObject -TargetPath "OU=Postes,OU=Tier2,DC=lab,DC=
 
 A noter : Microsoft a fait evoluer ce modele Tier 0/1/2 (2016) vers l'**Enterprise Access Model** (depuis ~2019), plus granulaire (Control Plane / Management Plane / Data Plane). Le tiering classique reste largement utilise et compris, donc choisi comme base pour ce lab.
 
+### Script idempotent de creation des OU
+
+Les commandes `New-ADOrganizationalUnit` ci-dessus plantent si on les relance (l'OU existe deja). Un script **idempotent** verifie l'etat actuel avant d'agir : il peut etre relance a volonte sans erreur ni effet de bord. C'est le meme principe que Terraform ou Ansible (convergence declarative) -- un bon reflexe a montrer plutot que de la simple commande ponctuelle.
+
+Script disponible dans [`scripts/create-ou-tiering.ps1`](scripts/create-ou-tiering.ps1). Il utilise `(Get-ADDomain).DistinguishedName` plutot qu'un `DC=lab,DC=local` code en dur, pour rester reutilisable sur un autre domaine. Chaque OU est verifiee via `Get-ADOrganizationalUnit -Filter` avant creation.
+
+Teste par une double execution : le premier run confirme que l'arborescence existante est bien detectee, le second (capture ci-dessous) confirme qu'aucune erreur n'est levee et que tout ressort en "OK - existe deja".
+
+![Relance idempotente du script de creation des OU](captures/preuve-script-idempotent-ou.png)
+
 ## Etapes a venir
 
-- Script PowerShell/Ansible idempotent pour recreer les OU (relancable sans erreur si elles existent deja)
 - CSV de 20-30 utilisateurs realistes + script de creation en masse
 - Groupes de securite par tier et premieres delegations
 - Provisioning DC-02 et verification de la replication
@@ -174,3 +183,7 @@ A noter : Microsoft a fait evoluer ce modele Tier 0/1/2 (2016) vers l'**Enterpri
 ## captures/
 
 Captures brutes et annotees des etapes ci-dessus.
+
+## scripts/
+
+Scripts idempotents reutilisables pour reconstruire cette partie du lab.
