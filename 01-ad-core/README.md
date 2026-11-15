@@ -68,6 +68,75 @@ Deux etapes distinctes :
 ```powershell
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 
+
+Statut : en cours (phase 1 du calendrier)
+
+Ce module couvre le coeur de l'annuaire : foret, controleur de domaine, arborescence d'OU/tiering, et cycle de vie des comptes (OU, groupes, utilisateurs). La gestion des postes clients (jonction au domaine, GPO postes) est documentee separement dans [02-postes](../02-postes/README.md).
+
+## VM concernees
+
+- **DC-01** (ex WIN-DA7VN0OLOAL, renomme) : Windows Server 2022, controleur de domaine
+
+## Etapes realisees
+
+### Reseau isole + connectivite
+
+Carte reseau host-only configuree sur les deux VM (192.168.100.0/24, pas de DHCP, IP statiques). Le ping entre DC-01 et WST-01 echouait malgre une config IP correcte : le pare-feu Windows bloque par defaut les requetes ICMPv4 Echo entrantes. Resolu avec une regle pare-feu locale-independante (voir [00-architecture](../00-architecture/README.md#incident-resolu) pour le detail de l'incident).
+
+![Regle pare-feu ICMPv4 activee](captures/preuve-firewall-icmpv4-active.png)
+![Ping DC-01 vers WST-01](captures/preuve-ping-dc01-vers-wst01.png)
+![Ping WST-01 vers DC-01](captures/preuve-ping-wst01-vers-dc01.png)
+![Configuration carte reseau isolee](captures/preuve-carte-reseau-isolee-hote-uniquement.png)
+
+### Promotion de DC-01 en controleur de domaine
+
+Deux etapes distinctes :
+
+1. **Installation du role AD DS** (`Install-WindowsFeature AD-Domain-Services -IncludeManagementTools`) : copie les binaires du service sur le disque. A ce stade le serveur ne fait encore rien de particulier, le role est juste disponible.
+2. **Promotion en controleur de domaine** (`Install-ADDSForest`) : cree la foret `lab.local`, initialise la base d'annuaire (`NTDS.dit`, dans `C:\Windows\NTDS`), demarre les services `NTDS`, `Netlogon` et `DNS`, et configure Kerberos comme protocole d'authentification par defaut du domaine.
+
+```powershell
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+
+Install-ADDSForest `
+  -DomainName "lab.local" `
+  -DomainNetbiosName "LAB" `
+  -InstallDns:$true `
+  -SafeModeAdministratorPassword (ConvertTo-SecureString "P@$$word" -AsPlainText -Force) `
+  -Force:$true
+```
+
+Deux avertissements affiches pendant la promotion, non bloquants et attendus pour un lab isole :
+
+Statut : en cours (phase 1 du calendrier)
+
+Ce module couvre le coeur de l'annuaire : foret, controleur de domaine, arborescence d'OU/tiering, et cycle de vie des comptes (OU, groupes, utilisateurs). La gestion des postes clients (jonction au domaine, GPO postes) est documentee separement dans [02-postes](../02-postes/README.md).
+
+## VM concernees
+
+- **DC-01** (ex WIN-DA7VN0OLOAL, renomme) : Windows Server 2022, controleur de domaine
+
+## Etapes realisees
+
+### Reseau isole + connectivite
+
+Carte reseau host-only configuree sur les deux VM (192.168.100.0/24, pas de DHCP, IP statiques). Le ping entre DC-01 et WST-01 echouait malgre une config IP correcte : le pare-feu Windows bloque par defaut les requetes ICMPv4 Echo entrantes. Resolu avec une regle pare-feu locale-independante (voir [00-architecture](../00-architecture/README.md#incident-resolu) pour le detail de l'incident).
+
+![Regle pare-feu ICMPv4 activee](captures/preuve-firewall-icmpv4-active.png)
+![Ping DC-01 vers WST-01](captures/preuve-ping-dc01-vers-wst01.png)
+![Ping WST-01 vers DC-01](captures/preuve-ping-wst01-vers-dc01.png)
+![Configuration carte reseau isolee](captures/preuve-carte-reseau-isolee-hote-uniquement.png)
+
+### Promotion de DC-01 en controleur de domaine
+
+Deux etapes distinctes :
+
+1. **Installation du role AD DS** (`Install-WindowsFeature AD-Domain-Services -IncludeManagementTools`) : copie les binaires du service sur le disque. A ce stade le serveur ne fait encore rien de particulier, le role est juste disponible.
+2. **Promotion en controleur de domaine** (`Install-ADDSForest`) : cree la foret `lab.local`, initialise la base d'annuaire (`NTDS.dit`, dans `C:\Windows\NTDS`), demarre les services `NTDS`, `Netlogon` et `DNS`, et configure Kerberos comme protocole d'authentification par defaut du domaine.
+
+```powershell
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+
 Install-ADDSForest `
   -DomainName "lab.local" `
   -DomainNetbiosName "LAB" `
@@ -217,9 +286,48 @@ Verification - `adm-yelj` apparait maintenant aux cotes du compte `Administrateu
 
 ![adm-yelj ajoute au groupe Admins du domaine](captures/preuve-adm-yelj-ajoute-domain-admins.png)
 
+### Groupes de securite par tier et premiere delegation
+
+**Le probleme que ca resout.** On vient de mettre `adm-yelj` directement dans `Admins du domaine` - correct pour un compte Tier0, c'est sa raison d'etre. Mais si chaque besoin d'administration (meme mineur, comme reinitialiser un mot de passe) passe par un ajout a Domain Admins, on retombe dans le piege demontre par l'attaque LDAP du module 03 : plus il y a de comptes a privilege large, plus la surface d'attaque est grosse. Le principe de delegation AD : un besoin specifique ne necessite pas un privilege large, on scope le droit exactement a ce qui est necessaire, sur l'OU necessaire.
+
+**Design retenu**, en s'appuyant sur les sous-OU `Groupes` deja presentes dans chaque tier :
+- `GG-Tier1-ServerAdmins` (dans `OU=Groupes,OU=Tier1`) : reserve pour l'administration des futurs serveurs Tier1 (DC-02, etc.), pas encore delegue.
+- `GG-Tier2-HelpDesk` (dans `OU=Groupes,OU=Tier2`) : delegation reelle et testee - reset mot de passe + deverrouillage de compte, **uniquement sur `OU=Utilisateurs,OU=Tier2`**.
+
+Tier0 n'a pas besoin d'un groupe supplementaire : `Admins du domaine` est deja le groupe de controle de Tier0.
+
+Script idempotent : [scripts/create-tier-groups.ps1](scripts/create-tier-groups.ps1).
+
+![Creation des groupes GG-Tier1-ServerAdmins et GG-Tier2-HelpDesk](captures/preuve-creation-groupes-tier1-tier2.png)
+
+**Delegation via `dsacls`.** `dsacls` lit et modifie directement le descripteur de securite (ACL) d'un objet AD - l'equivalent en ligne de commande de l'onglet Securite/Avance dans ADUC. Trois droits accordes, volontairement granulaires plutot qu'un `GenericWrite` qui ouvrirait trop de portes :
+
+```powershell
+$ouTier2Users = "OU=Utilisateurs,OU=Tier2,$((Get-ADDomain).DistinguishedName)"
+
+dsacls $ouTier2Users /I:S /G "LAB\GG-Tier2-HelpDesk:CA;Reset Password"   # droit etendu de reinitialiser le mot de passe
+dsacls $ouTier2Users /I:S /G "LAB\GG-Tier2-HelpDesk:WP;lockoutTime"     # ecriture de l'attribut qui deverrouille un compte
+dsacls $ouTier2Users /I:S /G "LAB\GG-Tier2-HelpDesk:WP;pwdLastSet"      # ecriture de l'attribut qui force le changement de mdp a la prochaine connexion
+```
+
+`/I:S` = l'autorisation s'applique aux sous-objets (les utilisateurs de l'OU), pas seulement a l'OU elle-meme. `CA` = Control Access Right (droit etendu). `WP` = Write Property (ecriture d'un attribut precis).
+
+Point important a noter sur la sortie de `dsacls` : la commande n'affiche pas seulement le droit qu'on vient d'ajouter, elle reaffiche **toute l'ACL existante de l'objet**, entrees par defaut comprises (Domain Admins, SYSTEM, Enterprise Admins, Account Operators, etc.). Rien d'anormal - c'est le comportement normal de l'outil. On y retrouve d'ailleurs une ligne qui fait echo direct a l'attaque du module 03 : `Autorise Utilisateurs authentifies : READ PERMISSIONS, LIST CONTENTS, READ PROPERTY, LIST OBJECT` - exactement le droit par defaut qu'on a exploite avec `ldapsearch`.
+
+![Sortie complete de dsacls apres ajout de la delegation](captures/preuve-dsacls-delegation-ajoutee.png)
+
+Verification ciblee (plus lisible qu'un dump complet) :
+
+```powershell
+dsacls $ouTier2Users | Select-String "GG-Tier2-HelpDesk"
+```
+
+![Les 3 delegations confirmees pour GG-Tier2-HelpDesk](captures/preuve-dsacls-delegation-confirmee-filtree.png)
+
+Prochaine etape pour clore ce point : ajouter un compte test (pas `adm-yelj`) dans `GG-Tier2-HelpDesk` et verifier qu'il peut reinitialiser le mot de passe d'un utilisateur Tier2 sans etre admin du domaine, ni pouvoir toucher a autre chose.
+
 ## Etapes a venir
 
-- Groupes de securite par tier et premieres delegations
 - Provisioning DC-02 et verification de la replication
 - GPO de durcissement (mot de passe, LAPS, Protected Users, restriction de login par tier)
 - Premier scan PingCastle
