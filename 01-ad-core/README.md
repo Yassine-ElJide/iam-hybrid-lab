@@ -38,6 +38,45 @@ Install-ADDSForest `
 ```
 
 Deux avertissements affiches pendant la promotion, non bloquants et attendus pour un lab isole :
+
+Statut : en cours (phase 1 du calendrier)
+
+Ce module couvre le coeur de l'annuaire : foret, controleur de domaine, arborescence d'OU/tiering, et cycle de vie des comptes (OU, groupes, utilisateurs). La gestion des postes clients (jonction au domaine, GPO postes) est documentee separement dans [02-postes](../02-postes/README.md).
+
+## VM concernees
+
+- **DC-01** (ex WIN-DA7VN0OLOAL, renomme) : Windows Server 2022, controleur de domaine
+
+## Etapes realisees
+
+### Reseau isole + connectivite
+
+Carte reseau host-only configuree sur les deux VM (192.168.100.0/24, pas de DHCP, IP statiques). Le ping entre DC-01 et WST-01 echouait malgre une config IP correcte : le pare-feu Windows bloque par defaut les requetes ICMPv4 Echo entrantes. Resolu avec une regle pare-feu locale-independante (voir [00-architecture](../00-architecture/README.md#incident-resolu) pour le detail de l'incident).
+
+![Regle pare-feu ICMPv4 activee](captures/preuve-firewall-icmpv4-active.png)
+![Ping DC-01 vers WST-01](captures/preuve-ping-dc01-vers-wst01.png)
+![Ping WST-01 vers DC-01](captures/preuve-ping-wst01-vers-dc01.png)
+![Configuration carte reseau isolee](captures/preuve-carte-reseau-isolee-hote-uniquement.png)
+
+### Promotion de DC-01 en controleur de domaine
+
+Deux etapes distinctes :
+
+1. **Installation du role AD DS** (`Install-WindowsFeature AD-Domain-Services -IncludeManagementTools`) : copie les binaires du service sur le disque. A ce stade le serveur ne fait encore rien de particulier, le role est juste disponible.
+2. **Promotion en controleur de domaine** (`Install-ADDSForest`) : cree la foret `lab.local`, initialise la base d'annuaire (`NTDS.dit`, dans `C:\Windows\NTDS`), demarre les services `NTDS`, `Netlogon` et `DNS`, et configure Kerberos comme protocole d'authentification par defaut du domaine.
+
+```powershell
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+
+Install-ADDSForest `
+  -DomainName "lab.local" `
+  -DomainNetbiosName "LAB" `
+  -InstallDns:$true `
+  -SafeModeAdministratorPassword (ConvertTo-SecureString "P@$$word" -AsPlainText -Force) `
+  -Force:$true
+```
+
+Deux avertissements affiches pendant la promotion, non bloquants et attendus pour un lab isole :
 - algorithmes de chiffrement compatibles NT4.0 desactives par defaut (point positif cote securite)
 - impossible de creer une delegation DNS car aucune zone parente n'existe (normal, il n'y a pas de DNS public au-dessus de ce domaine de lab)
 
@@ -156,6 +195,27 @@ Script de creation dans [`scripts/create-users-from-csv.ps1`](scripts/create-use
 
 ![Sortie du script de creation en masse (27 comptes)](captures/preuve-creation-masse-utilisateurs.png)
 ![adm-yelj seul dans OU=Admins,OU=Tier0](captures/preuve-adm-yelj-tier0-admins.png)
+
+### Correction : adm-yelj n'etait pas reellement admin (OU != groupe)
+
+Point identifie en cours de route : `adm-yelj` a ete cree directement dans `OU=Admins,OU=Tier0` par le script de creation en masse, mais celui-ci ne definit que l'OU (`-Path`) - **une OU est purement organisationnelle, elle ne donne aucun droit**. Seule l'appartenance a un groupe (ici `Domain Admins`, affiche `Admins du domaine` sur un AD en francais) accorde un privilege reel. Jusqu'a cette correction, `adm-yelj` n'etait donc administrateur de rien, malgre son placement dans l'OU Tier0.
+
+Correction appliquee :
+
+```powershell
+Add-ADGroupMember -Identity "Admins du domaine" -Members adm-yelj
+```
+
+Point technique annexe : les noms des groupes integres sont traduits selon la langue du serveur (`Domain Admins` -> `Admins du domaine`), mais leur identifiant reel (RID) ne change jamais - `512` pour Domain Admins, quelle que soit la langue. Une alternative independante de la langue :
+
+```powershell
+$domainSID = (Get-ADDomain).DomainSID.Value
+Add-ADGroupMember -Identity "$domainSID-512" -Members adm-yelj
+```
+
+Verification - `adm-yelj` apparait maintenant aux cotes du compte `Administrateur` integre :
+
+![adm-yelj ajoute au groupe Admins du domaine](captures/preuve-adm-yelj-ajoute-domain-admins.png)
 
 ## Etapes a venir
 
