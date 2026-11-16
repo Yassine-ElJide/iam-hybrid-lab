@@ -40,4 +40,35 @@ dsacls $ouTier2Users | Select-String "GG-Tier2-HelpDesk"
 
 ![Les 3 delegations confirmees pour GG-Tier2-HelpDesk](../captures/preuve-dsacls-delegation-confirmee-filtree.png)
 
-Prochaine etape pour clore ce point : ajouter un compte test (pas `adm-yelj`) dans `GG-Tier2-HelpDesk` et verifier qu'il peut reinitialiser le mot de passe d'un utilisateur Tier2 sans etre admin du domaine, ni pouvoir toucher a autre chose.
+### Preuve de fonctionnement : test positif + tests negatifs
+
+**Protocole.** Un compte `test-helpdesk`, membre uniquement de `GG-Tier2-HelpDesk` (pas de `adm-yelj`, pour ne pas violer le tiering en testant un compte Tier0 sur un poste Tier2), connecte sur **WST-01** avec une session PowerShell non elevee. Les droits delegues via AD sont independants des droits locaux de la machine : pas besoin d'etre administrateur du poste pour que la delegation AD fonctionne.
+
+Trois commandes, un seul objectif : prouver que la delegation fait *exactement* ce qu'on a autorise, ni plus ni moins.
+
+```powershell
+Import-Module ActiveDirectory
+
+# Test positif : amartin est dans OU=Utilisateurs,OU=Tier2 -> dans le perimetre delegue
+Set-ADAccountPassword -Identity amartin -Reset -NewPassword (ConvertTo-SecureString "Nouveau2026!" -AsPlainText -Force)
+
+# Test negatif #1 : svc-backup est hors perimetre (pas dans l'OU Tier2 deleguee)
+Set-ADAccountPassword -Identity svc-backup -Reset -NewPassword (ConvertTo-SecureString "Nouveau2026!" -AsPlainText -Force)
+
+# Test negatif #2 : tentative d'auto-elevation de privileges
+Add-ADGroupMember -Identity "Admins du domaine" -Members test-helpdesk
+```
+
+**Resultat :**
+
+| Test | Attendu | Observe |
+|---|---|---|
+| Reset mot de passe sur `amartin` (Tier2, dans le perimetre) | Succes | Succes, aucune erreur |
+| Reset mot de passe sur `svc-backup` (hors perimetre) | Echec | `Acces refuse` - `UnauthorizedAccessException` |
+| Auto-ajout a `Admins du domaine` | Echec | `Droits d'acces insuffisants` - `ADException` |
+
+![Test positif et tests negatifs de la delegation GG-Tier2-HelpDesk depuis WST-01](../captures/preuve-delegation-tier2-helpdesk-tests.png)
+
+**Pourquoi c'est la preuve qui compte.** N'importe qui peut accorder un droit et constater qu'il fonctionne - le vrai test d'une delegation en moindre privilege, c'est de prouver qu'elle ne deborde pas. Le test negatif #1 confirme que le scope (`OU=Utilisateurs,OU=Tier2` uniquement) est respecte. Le test negatif #2 confirme qu'aucun des 3 droits accordes (`Reset Password`, ecriture de `lockoutTime`, ecriture de `pwdLastSet`) ne permet, meme indirectement, une elevation vers un groupe privilegie. C'est la demonstration concrete de ce que l'attaque LDAP du module 03 rend necessaire : moins un compte a de droits larges, moins il represente de risque en cas de compromission.
+
+Le test de delegation `GG-Tier2-HelpDesk` est donc clos : positif et negatifs tous deux confirmes.

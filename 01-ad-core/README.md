@@ -20,7 +20,6 @@ Le detail de chaque etape est reparti dans plusieurs documents pour rester lisib
 
 ## Etapes a venir
 
-- Finir le test de la delegation `GG-Tier2-HelpDesk` (preuve positive + preuve negative)
 - Appliquer le plan de remediation PingCastle (voir [docs/05-audit-pingcastle.md](docs/05-audit-pingcastle.md)), en commencant par les corrections rapides et a faible risque
 - Provisioning DC-02 et verification de la replication (corrigera aussi la regle PingCastle A-NotEnoughDC)
 - GPO de durcissement (mot de passe, LAPS, Protected Users, restriction de login par tier)
