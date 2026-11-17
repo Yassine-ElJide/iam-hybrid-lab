@@ -82,7 +82,7 @@ Priorite donnee aux correctifs rapides et a faible risque d'abord (une commande,
 
 7. **A-MinPwdLen** - remonter `MinPasswordLength` (ex: 14) via `Set-ADDefaultDomainPasswordPolicy`
 8. **P-Delegated + P-ProtectedUsers** (30 pts cumules) - ajouter `adm-yelj` (et prudemment `Administrateur`) au groupe `Protected Users` - attention, ce groupe force Kerberos pur (plus de NTLM, plus de cache d'identifiants, plus de delegation) : a tester d'abord sur `adm-yelj` seul pour ne pas se retrouver bloque
-9. **S-OldNtlm** - GPO "Network security: LAN Manager authentication level" -> "Send NTLMv2 response only. Refuse LM & NTLM"
+9. [x] **S-OldNtlm** - GPO "Network security: LAN Manager authentication level" -> "Send NTLMv2 response only. Refuse LM & NTLM" - corrige le 2026-11-17, confirme par le re-scan (voir section Palier 2)
 10. **A-HardenedPaths** - GPO durcissement des chemins UNC SYSVOL/NETLOGON
 
 ### Deja planifie ailleurs dans le projet
@@ -96,6 +96,7 @@ Priorite donnee aux correctifs rapides et a faible risque d'abord (une commande,
 |---|---|---|---|---|---|---|
 | 2026-11-15 | 55/100 | 40/100 | 50/100 | 0/100 | 55/100 | Baseline, avant tout correctif |
 | 2026-11-17 | 45/100 | 30/100 | 30/100 | 0/100 | 45/100 | Apres le palier 1 (6 corrections rapides) |
+| 2026-11-17 | 45/100 | **15/100** | 30/100 | 0/100 | 45/100 | Apres le palier 2 (GPO durcissement NTLM) - `S-OldNtlm` corrige, score global inchange car plafonne par Anomalies (voir explication plus bas) |
 
 ![Re-scan PingCastle apres le palier 1 : 45/100](../pingcastle/preuve-pingcastle-rescan-2026-11-17-45-100.png)
 
@@ -140,6 +141,66 @@ Remove-ADGroupMember -Identity $sid -Members Administrateur
 - `S-DC-SubnetMissing` mentionnait a l'origine **2 adresses IP pour DC-01** (probablement une carte isolee + une carte NAT pour l'acces Internet, utilisee par exemple pour telecharger PingCastle). Seul un sous-reseau a ete declare. A verifier : `ipconfig /all` sur DC-01 pour lister toutes ses IP, puis `Get-ADReplicationSubnet -Filter *` pour confirmer que chaque IP tombe bien dans un sous-reseau declare - declarer le sous-reseau manquant si besoin.
 
 Ces deux points restent ouverts et seront verifies au prochain passage.
+
+## Palier 2 - Durcissement NTLM via GPO (2026-11-17)
+
+**Objectif.** Corriger `S-OldNtlm` (15 pts, categorie Stale Objects) en interdisant NTLMv1 et LM sur le domaine, sans casser une authentification legitime qui en dependrait encore.
+
+**Methodologie : auditer avant d'imposer.** Plutot que de forcer directement le refus de NTLM/LM (ce qui aurait pu casser un service ou une appli qui en depend encore sans qu'on le sache), la demarche a ete en deux temps :
+
+1. Activer l'**audit** du trafic NTLM (entrant et sortant) pendant un moment, pour observer ce qui se passe reellement sur le domaine (journal `Microsoft-Windows-NTLM/Operational`, evenement 8004) sans rien bloquer.
+2. Une fois le risque de casse evalue comme nul (lab isole, aucun systeme legacy dependant de NTLM/LM), **appliquer** la restriction effective.
+
+**Bonne pratique GPO appliquee : ne jamais modifier directement la `Default Domain Policy` ou la `Default Domain Controllers Policy`** (sauf pour les reglages de mot de passe/Kerberos/audit, qui sont faits pour y vivre). A la place, une GPO dediee `GPO-Durcissement-NTLM` a ete creee et liee a la racine du domaine, pour rester reversible et isolee des autres reglages.
+
+### Etape 1 - creation de la GPO et parametres d'audit
+
+Dans `GPO-Durcissement-NTLM`, deux reglages d'audit ont ete actives en premier :
+- **Securite reseau : Restreindre NTLM : Auditer le trafic NTLM entrant** -> `Activer l'audit pour tous les comptes`
+- **Securite reseau : Restreindre NTLM : Trafic NTLM sortant vers des serveurs distants** -> `Auditer tout`
+
+![Parametres d'audit NTLM configures dans la GPO (vue GPMC)](../captures/preuve-gpo-ntlm-parametres-gpmc.png)
+![Vue complete de l'editeur de gestion des strategies de groupe - options de securite reseau](../captures/preuve-gpo-ntlm-editeur-securite-complet.png)
+
+### Etape 2 - application et verification (`gpupdate` / RSOP)
+
+Apres liaison de la GPO a la racine du domaine, `gpupdate /force` a ete lance sur DC-01 et sur WST-01.
+
+![gpupdate /force sur WST-01](../captures/preuve-gpupdate-force-wst01.png)
+
+**Verification RSOP sur DC-01 (scope ordinateur)** : confirme que `GPO-Durcissement-NTLM` fait bien partie des "Objets Strategie de groupe appliques", aux cotes de `Default Domain Controllers Policy` et `Default Domain Policy`.
+
+![RSOP sur DC-01 confirmant l'application de GPO-Durcissement-NTLM](../captures/preuve-rsop-dc01-gpo-ntlm-appliquee.png)
+
+**Point de confusion rencontre et explique : `gpresult /r` sur WST-01 affichait `N/A`.** Ce n'etait pas un echec d'application - c'est le resultat **normal** du scope **Utilisateur** (celui par defaut de `gpresult /r`) : notre GPO ne contient que des reglages de **Configuration ordinateur**, donc le scope utilisateur n'a logiquement rien a afficher.
+
+![RSOP scope utilisateur sur WST-01 : N/A, normal car la GPO ne contient que des reglages ordinateur](../captures/preuve-rsop-wst01-scope-utilisateur-na.png)
+
+Pour voir le bon scope, il fallait `gpresult /r /scope:computer`, qui a d'abord renvoye "Acces refuse". La aussi, c'est voulu : **le scope ordinateur de RSOP exige des droits d'administrateur local**, car il expose via WMI (`root\rsop`) toute la configuration de securite de la machine - une information sensible du point de vue reconnaissance, protegee par Windows par defaut (meme logique de moindre privilege que le modele de tiering du projet). La commande a ete relancee depuis une session PowerShell elevee avec le compte **Administrateur local integre** de WST-01 - deliberement pas `adm-yelj` (compte Tier 0), pour ne pas faire toucher un identifiant Tier 0 a une machine Tier 2, conformement a la regle de tiering du projet.
+
+### Etape 3 - passage en mode impose
+
+Apres la periode d'audit (rapide ici, car lab isole sans systeme legacy), le reglage final a ete applique :
+
+**Securite reseau : Niveau d'authentification LAN Manager** -> `Envoyer uniquement une reponse NTLMv2. Refuser LM et NTLM`
+
+![Parametre final : refus de LM et NTLM, NTLMv2 uniquement](../captures/preuve-gpo-ntlm-niveau-authentification-lan-manager.png)
+
+### Etape 4 - verification du resultat
+
+Le rapport PingCastle re-scanne confirme deux choses :
+
+1. **La GPO est bien vue et appliquee** - section "Security settings" du rapport, qui liste `GPO-Durcissement-NTLM` avec le reglage `LAN Manager authentication level = Send NTLMv2 response only. Refuse LM & NTLM`. Le reglage d'audit sortant (`Audit (Deny All is not enabled)`) apparait en rouge, ce qui est **attendu et volontaire** : il reste en mode audit pour l'instant, le blocage total (Deny All) du trafic NTLM sortant sera envisage plus tard, apres une periode d'observation plus longue.
+
+![Rapport PingCastle - section Security settings confirmant la GPO NTLM](../pingcastle/preuve-pingcastle-security-settings-gpo-ntlm.png)
+
+2. **`Stale Objects` est passe de 30/100 a 15/100** (-15 pts, exactement le poids de `S-OldNtlm`), confirmant que la regle est bien resolue. Il ne reste dans cette categorie que `S-AesNotEnabled` (10 pts) et `S-DC-SubnetMissing` (5 pts), les deux points encore ouverts et deliberement non traites pour l'instant (voir plus haut).
+
+![Stale Objects : 15/100 apres correction de S-OldNtlm](../pingcastle/preuve-pingcastle-stale-objects-15-100.png)
+
+**Pourquoi le score global reste a 45/100 malgre une vraie correction.** Premiere reaction naturelle : "le score ne bouge pas, ca n'a pas marche". En realite si - mais le score de risque global du domaine est explicitement defini par PingCastle comme **le maximum des 4 categories, pas une moyenne ni une somme** (texte du rapport : *"It is the maximum score of the 4 indicators and one score cannot be higher than 100"*). Avant comme apres cette correction, `Anomalies` est reste a 45/100 (LAPS non deploye, audit DC, longueur de mot de passe, DC manquant, chemins UNC non durcis - voir plus haut) : c'est cette categorie qui fixe le plafond, independamment de l'ameliration reelle de `Stale Objects`. Autrement dit : la correction a bien fonctionne, mais elle ne devient visible sur le score global que lorsque `Stale Objects` cesse d'etre la pire categorie - ce qui n'etait deja plus le cas avant meme cette correction (`Anomalies` etait deja devant). Le prochain gain visible sur le score global viendra forcement d'une correction dans `Anomalies`.
+
+![Rappel visuel : le score global est le maximum des 4 indicateurs, pas une moyenne](../pingcastle/preuve-pingcastle-score-maximum-4-indicateurs.png)
 
 ## Glossaire - NTLM, Kerberos et les attaques qui en decoulent
 
