@@ -87,7 +87,7 @@ Priorite donnee aux correctifs rapides et a faible risque d'abord (une commande,
 
 ### Deja planifie ailleurs dans le projet
 
-- **A-LAPS-Not-Installed** - sera traite dans la phase GPO de durcissement (deploiement complet de Windows LAPS)
+- [x] **A-LAPS-Not-Installed** - deploye le 2026-11-20 (voir section Palier 3), confirme par le re-scan
 - **A-NotEnoughDC** - sera resolu par le provisioning de DC-02
 
 ## Suivi de la progression
@@ -97,6 +97,7 @@ Priorite donnee aux correctifs rapides et a faible risque d'abord (une commande,
 | 2026-11-15 | 55/100 | 40/100 | 50/100 | 0/100 | 55/100 | Baseline, avant tout correctif |
 | 2026-11-17 | 45/100 | 30/100 | 30/100 | 0/100 | 45/100 | Apres le palier 1 (6 corrections rapides) |
 | 2026-11-17 | 45/100 | **15/100** | 30/100 | 0/100 | 45/100 | Apres le palier 2 (GPO durcissement NTLM) - `S-OldNtlm` corrige, score global inchange car plafonne par Anomalies (voir explication plus bas) |
+| 2026-11-20 | **30/100** | 15/100 | 30/100 | 0/100 | **30/100** | Apres le palier 3 (deploiement Windows LAPS) - `A-LAPS-Not-Installed` corrige, **premier vrai mouvement du score global** (45 -> 30) |
 
 ![Re-scan PingCastle apres le palier 1 : 45/100](../pingcastle/preuve-pingcastle-rescan-2026-11-17-45-100.png)
 
@@ -201,6 +202,82 @@ Le rapport PingCastle re-scanne confirme deux choses :
 **Pourquoi le score global reste a 45/100 malgre une vraie correction.** Premiere reaction naturelle : "le score ne bouge pas, ca n'a pas marche". En realite si - mais le score de risque global du domaine est explicitement defini par PingCastle comme **le maximum des 4 categories, pas une moyenne ni une somme** (texte du rapport : *"It is the maximum score of the 4 indicators and one score cannot be higher than 100"*). Avant comme apres cette correction, `Anomalies` est reste a 45/100 (LAPS non deploye, audit DC, longueur de mot de passe, DC manquant, chemins UNC non durcis - voir plus haut) : c'est cette categorie qui fixe le plafond, independamment de l'ameliration reelle de `Stale Objects`. Autrement dit : la correction a bien fonctionne, mais elle ne devient visible sur le score global que lorsque `Stale Objects` cesse d'etre la pire categorie - ce qui n'etait deja plus le cas avant meme cette correction (`Anomalies` etait deja devant). Le prochain gain visible sur le score global viendra forcement d'une correction dans `Anomalies`.
 
 ![Rappel visuel : le score global est le maximum des 4 indicateurs, pas une moyenne](../pingcastle/preuve-pingcastle-score-maximum-4-indicateurs.png)
+
+## Palier 3 - Deploiement de Windows LAPS (2026-11-20)
+
+**Objectif.** Corriger `A-LAPS-Not-Installed` (15 pts, categorie Anomalies - celle qui plafonnait le score global depuis le palier 2).
+
+### Le probleme que LAPS resout
+
+Sur beaucoup de parcs AD, le compte **Administrateur local** de chaque poste/serveur partage **le meme mot de passe partout** (image master clonee, script de provisioning identique). Consequence directe : un attaquant qui recupere ce hash sur **une seule machine** (par exemple via Mimikatz apres une compromission initiale) peut rejouer ce meme hash (attaque **Pass-the-Hash**) pour se deplacer lateralement sur **tout le parc**, sans jamais avoir besoin du mot de passe en clair. C'est l'un des chemins de mouvement lateral les plus simples et les plus repandus en environnement AD.
+
+**Ce que fait LAPS (Local Administrator Password Solution).** Chaque machine se voit attribuer un mot de passe admin local **unique, aleatoire, et change automatiquement** a intervalle regulier (30 jours ici). Le mot de passe est stocke chiffre directement sur l'objet ordinateur dans AD, lisible uniquement par les comptes explicitement autorises.
+
+**Windows LAPS (version native).** Depuis Server 2022/Windows 11 (retroportee sur les versions anterieures via mises a jour), LAPS est integre nativement a l'OS et au schema AD, avec chiffrement de l'attribut cote AD (`msLAPS-EncryptedPassword`) - contrairement a l'ancienne version (Microsoft LAPS, un addon separe) qui stockait le mot de passe en clair dans un attribut, un risque si les permissions de lecture etaient mal configurees.
+
+### Etape 1 - extension du schema AD
+
+Premiere tentative bloquee : le module `LAPS` n'etait pas present sur DC-01 (`Update-LapsADSchema` renvoyait `CommandNotFoundException`). Diagnostic : DC-01 tournait en build RTM de Server 2022 (20348), jamais mis a jour depuis l'installation - **les cmdlets LAPS natives n'ont ete integrees a l'OS qu'a partir des cumulatifs d'avril 2023**. Windows Update a ete lance et le module est apparu apres redemarrage.
+
+![Tentative initiale : module LAPS absent avant la mise a jour Windows](../captures/preuve-laps-module-absent-avant-maj-windows.png)
+
+Deuxieme blocage, inattendu : une fois le module present, `Update-LapsADSchema` echouait avec *"L'utilisateur ne dispose pas de droits d'acces suffisants"*. Pas un bug - la **consequence directe du palier 1** : le groupe `Schema Admins` avait ete deliberement vide (`P-SchemaAdmin`) pour reduire la surface d'attaque, et modifier le schema AD exige d'en etre membre.
+
+![Echec de l'extension du schema - Schema Admins est vide depuis le palier 1](../captures/preuve-laps-schema-extension-echec-droits.png)
+
+**Solution appliquee - le bon reflexe sur un groupe Schema Admins vide par defaut** : reintegrer temporairement le compte via le RID (`$sid = (Get-ADDomain).DomainSID.Value + "-518"`), faire l'operation, puis retirer immediatement le compte. Une premiere tentative a encore echoue juste apres l'ajout : le **ticket Kerberos de la session en cours avait ete emis avant l'ajout au groupe**, il ne refletait donc pas encore la nouvelle appartenance.
+
+![Deuxieme echec : le token de la session ne reflete pas encore l'ajout a Schema Admins](../captures/preuve-laps-schema-extension-echec-token-non-rafraichi.png)
+
+Une **nouvelle session** (donc un nouveau ticket Kerberos, a jour) a resolu le probleme : l'extension du schema est passee, puis le compte a ete immediatement retire de Schema Admins pour revenir a un groupe vide.
+
+![Extension du schema reussie dans une nouvelle session, puis retrait immediat de Schema Admins](../captures/preuve-laps-schema-extension-reussie-retrait-schema-admins.png)
+
+### Etape 2 - permissions LAPS sur l'OU cible
+
+Deux permissions distinctes accordees sur `OU=Postes,OU=Tier2` :
+- **Self-permission** (`Set-LapsADComputerSelfPermission`) : chaque machine a le droit d'ecrire son propre mot de passe LAPS sur son objet AD - c'est la machine elle-meme qui genere et pousse la rotation.
+- **Read-permission** (`Set-LapsADReadPasswordPermission`) : le groupe de delegation deja existant `GG-Tier2-HelpDesk` a le droit de **lire** ce mot de passe quand besoin.
+
+Premiere tentative avec le nom isole du groupe (`"GG-Tier2-HelpDesk"`) rejetee - la cmdlet exige un nom pleinement qualifie :
+
+![Erreur de format sur le nom du groupe de lecture](../captures/preuve-laps-permission-lecture-erreur-format.png)
+
+Corrige avec le format `DOMAINE\groupe` (`"LAB\GG-Tier2-HelpDesk"`) :
+
+![Permission de lecture accordee avec le bon format](../captures/preuve-laps-permission-lecture-ok.png)
+
+### Etape 3 - GPO dediee
+
+Meme principe que pour la GPO NTLM (palier 2) : une GPO dediee `GPO-LAPS`, liee a `OU=Postes,OU=Tier2`, plutot que de toucher aux GPO par defaut. Parametres configures dans `Configuration ordinateur > Strategies > Modeles d'administration > System > LAPS` :
+
+- **Configurer le repertoire de sauvegarde du mot de passe** -> `Active Directory`
+- **Parametres du mot de passe** -> longueur 14, complexite elevee, age max 30 jours
+- **Nom du compte administrateur a gerer** -> laisse **Non configure** (point de vigilance : il etait initialement passe par erreur sur `Active`, ce qui aurait fait chercher a LAPS un compte au nom specifique au lieu de gerer automatiquement, par SID, le compte `Administrateur` integre - corrige avant application)
+
+![Parametres de la GPO LAPS](../captures/preuve-laps-gpo-parametres.png)
+
+### Etape 4 - verification et piege du mauvais `gpupdate`
+
+Premiere verification vide : `Get-LapsADPassword -Identity WST-01 -AsPlainText` ne renvoyait rien. Cause identifiee : le `gpupdate /force` initial avait ete lance sur **DC-01** au lieu de **WST-01** - DC-01 n'etant pas dans l'OU ciblee par `GPO-LAPS`, rien n'y a ete applique, donc rien a observer cote WST-01 non plus.
+
+![Premiere verification vide - gpupdate lance sur la mauvaise machine (DC-01 au lieu de WST-01)](../captures/preuve-laps-verification-vide-avant-gpupdate-wst01.png)
+
+Une fois `gpupdate /force` relance **sur WST-01 lui-meme**, la rotation s'est declenchee immediatement :
+
+![Mot de passe LAPS recupere avec succes pour WST-01](../captures/preuve-laps-mot-de-passe-recupere-wst01.png)
+
+Champs cles du resultat : `PasswordUpdateTime` confirme que le mot de passe vient d'etre genere a l'instant, `ExpirationTimestamp` fixe la prochaine rotation a 30 jours, `DecryptionStatus: Success` confirme que le compte utilise a bien les droits de dechiffrement, et `AuthorizedDecryptor` liste `LAB\Admins du domaine` comme autorise.
+
+**Consequence pratique immediate** : le mot de passe local `Administrateur` de WST-01 connu jusque-la n'est **plus valide** - LAPS l'a deja remplace. Toute connexion future en Administrateur local sur WST-01 necessite de repasser par `Get-LapsADPassword` (ou l'outil graphique equivalent) pour recuperer la valeur courante, qui elle-meme change automatiquement tous les 30 jours.
+
+### Resultat PingCastle
+
+Le re-scan confirme `A-LAPS-Not-Installed` corrige : `Anomalies` passe de 45/100 (13 regles) a **30/100** (12 regles), soit -15 pts - exactement le poids de la regle. Comme `Anomalies` etait la categorie qui plafonnait le score global depuis le palier 2, c'est **le premier vrai mouvement visible sur le score global** : 45 -> **30/100**.
+
+![Re-scan PingCastle apres le palier 3 : score global 30/100](../pingcastle/preuve-pingcastle-rescan-2026-11-20-30-100.png)
+
+`Privileged Accounts` (30/100) et `Anomalies` (30/100) sont desormais a egalite comme prochain goulot d'etranglement pour continuer a faire baisser le score global.
 
 ## Glossaire - NTLM, Kerberos et les attaques qui en decoulent
 
